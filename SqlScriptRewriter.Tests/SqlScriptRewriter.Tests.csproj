@@ -6,6 +6,7 @@
 	<IsTestProject>true</IsTestProject>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\SqlScriptRewriter.ConditionalComments\SqlScriptRewriter.ConditionalComments.csproj" />
     <ProjectReference Include="..\SqlScriptRewriter\SqlScriptRewriter.csproj" />
   </ItemGroup>
   <ItemGroup>
