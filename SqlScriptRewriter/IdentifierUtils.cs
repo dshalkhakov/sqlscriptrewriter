@@ -57,7 +57,7 @@ namespace SqlScriptRewriter
         private static string QuoteIdentifier(string s)
             => "[" + s + "]";
 
-        public static void PeekProcedureName(Func<int, TSqlParserToken> peekToken, out TSqlParserToken schemaName, out TSqlParserToken procedureName)
+        public static int PeekProcedureName(Func<int, TSqlParserToken> peekToken, out TSqlParserToken schemaName, out TSqlParserToken procedureName)
         {
             var ident1Token = peekToken(1);
             var nameDotToken = peekToken(2);
@@ -70,6 +70,9 @@ namespace SqlScriptRewriter
             procedureName = nameIncludesSchema
                 ? ident2Token
                 : ident1Token;
+
+            // return how many tokens of lookahead we needed to parse the procedure name
+            return nameIncludesSchema ? 3 : 1;
         }
 
         public static void ParseModuleName(

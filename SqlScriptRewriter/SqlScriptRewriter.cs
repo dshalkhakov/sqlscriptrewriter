@@ -43,7 +43,7 @@ namespace SqlScriptRewriter
             return err;
         }
 
-        private TSqlFragment Parse(string script, out IList<ParseError> errors)
+        public TSqlFragment Parse(string script, out IList<ParseError> errors)
         {
             errors = new List<ParseError>();
             var parser = new TSql110Parser(true); // TODO should be 100. but we have a script which has IIF, available since 110
@@ -54,7 +54,7 @@ namespace SqlScriptRewriter
             }
         }
 
-        private TSqlParserToken PeekToken(TSqlFragment fragment, ref int current, int offset)
+        public TSqlParserToken PeekToken(TSqlFragment fragment, ref int current, int offset)
         {
             var ofs = 0;
             for (var i = 0; i < offset; i++)

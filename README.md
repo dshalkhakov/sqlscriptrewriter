@@ -56,8 +56,8 @@ For more information, please see the `SqlScriptRewriter.Tests` project.
 
 ## Idempotent CREATE/ALTER FUNCTION
 
-`CREATE/ALTER FUNCTION` is tricky. One cannot create a simple stub, and then issue `ALTERs`.
-Here's what is done instead:
+`CREATE/ALTER FUNCTION` is tricky. There are three different function types: IF (inline table valued function), TF (table valued function), FN (scalar function).
+All of them are rewritten to idempotent style. E.g. a scalar function
 
 ```
 CREATE FUNCTION Foo() RETURNS INT AS BEGIN RETURN 10 END
@@ -66,12 +66,12 @@ CREATE FUNCTION Foo() RETURNS INT AS BEGIN RETURN 10 END
 will be rewritten to
 
 ```
-IF EXISTS (SELECT name FROM sys.objects WITH (nolock) WHERE object_id = OBJECT_ID(N'Foo') AND type IN (N'FN',N'TF',N'IF',N'TF'))
-  EXEC('DROP FUNCTION Foo')
-CREATE FUNCTION Foo() RETURNS INT AS BEGIN RETURN 10 END
+IF NOT EXISTS (SELECT 1 FROM sys.objects WITH (nolock) WHERE object_id = OBJECT_ID(N'Foo') AND type = N'FN')
+  EXEC('CREATE FUNCTION Foo() RETURNS INT AS BEGIN RETURN 1 END')
+ALTER FUNCTION Foo() RETURNS INT AS BEGIN RETURN 10 END
 ```
 
-This is the only case where `DROP` is issued. For `ALTER FUNCTION`, the same code is generated: `DROP` followed by `CREATE`.
+**NOTE:**: if the type of the function changes (e.g. a scalar function was modified and became a table-valued one), a separate migration script dropping the previous definition should be added.
 
 ## Conditional comments
 

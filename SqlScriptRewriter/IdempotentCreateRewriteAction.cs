@@ -1,6 +1,6 @@
 ﻿using Microsoft.SqlServer.TransactSql.ScriptDom;
 using System;
-using System.Xml.Linq;
+using SqlScriptRewriter.Enums;
 
 namespace SqlScriptRewriter
 {
@@ -19,7 +19,7 @@ namespace SqlScriptRewriter
         {
             var procedureToken = peekToken(1);
 
-            IdentifierUtils.PeekProcedureName(tok => peekToken(tok+1), out var schemaName, out var procedureName);
+            var lookahead = IdentifierUtils.PeekProcedureName(tok => peekToken(tok+1), out var schemaName, out var procedureName);
 
             switch (token.TokenType)
             {
@@ -39,7 +39,18 @@ namespace SqlScriptRewriter
                     else if (procedureToken?.TokenType == TSqlTokenType.Function
                          && IdentifierUtils.TokenIsIdentifier(procedureName))
                     {
-                        return RewriteCreateOrAlterFunction(token, schemaName, procedureName);
+                        var functionType = FunctionUtils.IsFunction(tok => peekToken(tok + lookahead + 1));
+                        switch (functionType)
+                        {
+                            case FunctionType.Bad:
+                                break;
+                            case FunctionType.IF:
+                                return RewriteCreateOrAlterInlineTableValuedFunction(token, schemaName, procedureName);
+                            case FunctionType.TF:
+                                return RewriteCreateOrAlterTableValuedFunction(token, schemaName, procedureName);
+                            case FunctionType.FN:
+                                return RewriteCreateOrAlterScalarFunction(token, schemaName, procedureName);
+                        }
                     }
                     else if (procedureToken?.TokenType == TSqlTokenType.View
                         && IdentifierUtils.TokenIsIdentifier(procedureName))
@@ -69,7 +80,7 @@ namespace SqlScriptRewriter
             }
         }
 
-        private TSqlParserToken[] RewriteCreateOrAlterFunction(TSqlParserToken token, TSqlParserToken schemaName, TSqlParserToken procedureName)
+        private TSqlParserToken[] RewriteCreateOrAlterScalarFunction(TSqlParserToken token, TSqlParserToken schemaName, TSqlParserToken procedureName)
         {
             var schemaNameText = IdentifierUtils.EnsureUnquoted(schemaName.Text);
             var procedureNameText = IdentifierUtils.EnsureUnquoted(procedureName.Text);
@@ -77,7 +88,39 @@ namespace SqlScriptRewriter
             {
                 var newSchemaNameText = IdentifierUtils.QuoteIfNeeded(schemaNameText, schemaName.Text);
                 var newProcedureNameText = IdentifierUtils.QuoteIfNeeded(procedureNameText, procedureName.Text);
-                return MakeDropCreateFunction(newSchemaNameText, newProcedureNameText, procedureNameText);
+                return MakeCreateAlterScalarFunction(newSchemaNameText, newProcedureNameText, procedureNameText);
+            }
+            else
+            {
+                return new[] { token };
+            }
+        }
+
+        private TSqlParserToken[] RewriteCreateOrAlterTableValuedFunction(TSqlParserToken token, TSqlParserToken schemaName, TSqlParserToken procedureName)
+        {
+            var schemaNameText = IdentifierUtils.EnsureUnquoted(schemaName.Text);
+            var procedureNameText = IdentifierUtils.EnsureUnquoted(procedureName.Text);
+            if (_identifierPredicate(schemaNameText, procedureNameText))
+            {
+                var newSchemaNameText = IdentifierUtils.QuoteIfNeeded(schemaNameText, schemaName.Text);
+                var newProcedureNameText = IdentifierUtils.QuoteIfNeeded(procedureNameText, procedureName.Text);
+                return MakeCreateAlterTableValuedFunction(newSchemaNameText, newProcedureNameText, procedureNameText);
+            }
+            else
+            {
+                return new[] { token };
+            }
+        }
+
+        private TSqlParserToken[] RewriteCreateOrAlterInlineTableValuedFunction(TSqlParserToken token, TSqlParserToken schemaName, TSqlParserToken procedureName)
+        {
+            var schemaNameText = IdentifierUtils.EnsureUnquoted(schemaName.Text);
+            var procedureNameText = IdentifierUtils.EnsureUnquoted(procedureName.Text);
+            if (_identifierPredicate(schemaNameText, procedureNameText))
+            {
+                var newSchemaNameText = IdentifierUtils.QuoteIfNeeded(schemaNameText, schemaName.Text);
+                var newProcedureNameText = IdentifierUtils.QuoteIfNeeded(procedureNameText, procedureName.Text);
+                return MakeCreateAlterInlineTableValuedFunction(newSchemaNameText, newProcedureNameText, procedureNameText);
             }
             else
             {
@@ -91,7 +134,7 @@ namespace SqlScriptRewriter
             if (_identifierPredicate(schemaNameText, string.Empty))
             {
                 nextToken(); // consume SCHEMA
-                nextToken(); // consume [schema_name]
+                nextToken(); // consume [evv]
                 return MakeCreateSchema(schemaNameText);
             }
             else
@@ -197,7 +240,7 @@ namespace SqlScriptRewriter
 
             return new[]
             {
-                // IF NOT EXISTS (SELECT name FROM sys.schemas WITH (nolock) WHERE name = 'schema_name')
+                // IF NOT EXISTS (SELECT name FROM sys.schemas WITH (nolock) WHERE name = 'evv')
                 new TSqlParserToken(TSqlTokenType.If, "IF"),
                 MakeWhitespace(),
                 new TSqlParserToken(TSqlTokenType.Not, "NOT"),
@@ -247,24 +290,26 @@ namespace SqlScriptRewriter
             };
         }
 
-        private static TSqlParserToken[] MakeDropCreateFunction(string schemaName, string procedureName, string procedureNameUnquoted)
+        private static TSqlParserToken[] MakeCreateAlterScalarFunction(string schemaName, string procedureName, string procedureNameUnquoted)
         {
             var objectName = string.IsNullOrEmpty(schemaName)
                 ? procedureName
                 : $"{schemaName}.{procedureName}";
-            var createFunctionDynamicSqlLiteral = $"'DROP FUNCTION {objectName}'";
+            var createFunctionDynamicSqlLiteral = $"'CREATE FUNCTION {objectName}() RETURNS INT AS BEGIN RETURN 1 END'";
 
             return new[]
             {
-                    // IF EXISTS (SELECT name FROM sys.objects WITH (nolock) WHERE object_id = OBJECT_ID('MyProc') and type IN ('FN', 'TF', 'IF', 'FN'))
+                    // IF NOT EXISTS (SELECT 1 FROM sys.objects WITH (nolock) WHERE object_id = OBJECT_ID('MyProc') and type IN ('FN', 'TF', 'IF', 'FN'))
                     new TSqlParserToken(TSqlTokenType.If, "IF"),
+                    MakeWhitespace(),
+                    new TSqlParserToken(TSqlTokenType.Not, "NOT"),
                     MakeWhitespace(),
                     new TSqlParserToken(TSqlTokenType.Exists, "EXISTS"),
                     MakeWhitespace(),
                     new TSqlParserToken(TSqlTokenType.LeftParenthesis, "("),
                     new TSqlParserToken(TSqlTokenType.Select, "SELECT"),
                         MakeWhitespace(),
-                        new TSqlParserToken(TSqlTokenType.Identifier, "name"),
+                        new TSqlParserToken(TSqlTokenType.Integer, "1"),
                         MakeWhitespace(),
                         new TSqlParserToken(TSqlTokenType.From, "FROM"),
                         MakeWhitespace(),
@@ -293,20 +338,12 @@ namespace SqlScriptRewriter
                         MakeWhitespace(),
                         new TSqlParserToken(TSqlTokenType.Identifier, "type"),
                         MakeWhitespace(),
-                        new TSqlParserToken(TSqlTokenType.In, "IN"),
+                        new TSqlParserToken(TSqlTokenType.EqualsSign, "="),
                         MakeWhitespace(),
-                            new TSqlParserToken(TSqlTokenType.LeftParenthesis, "("),
                             new TSqlParserToken(TSqlTokenType.AsciiStringLiteral, "N'FN'"),
-                            new TSqlParserToken(TSqlTokenType.Comma, ","),
-                            new TSqlParserToken(TSqlTokenType.AsciiStringLiteral, "N'TF'"),
-                            new TSqlParserToken(TSqlTokenType.Comma, ","),
-                            new TSqlParserToken(TSqlTokenType.AsciiStringLiteral, "N'IF'"),
-                            new TSqlParserToken(TSqlTokenType.Comma, ","),
-                            new TSqlParserToken(TSqlTokenType.AsciiStringLiteral, "N'TF'"),
-                        new TSqlParserToken(TSqlTokenType.RightParenthesis, ")"),
                     new TSqlParserToken(TSqlTokenType.RightParenthesis, ")"),
                     new TSqlParserToken(TSqlTokenType.WhiteSpace, "\r\n  "),
-                    //    EXEC('DROP FUNCTION dbo.MyProc')
+                    //    EXEC('CREATE FUNCTION dbo.MyProc')
                     new TSqlParserToken(TSqlTokenType.Exec, "EXEC"),
                     new TSqlParserToken(TSqlTokenType.LeftParenthesis, "("),
                     new TSqlParserToken(TSqlTokenType.AsciiStringLiteral, createFunctionDynamicSqlLiteral),
@@ -316,7 +353,141 @@ namespace SqlScriptRewriter
                     new TSqlParserToken(TSqlTokenType.End, "GO"),
                     new TSqlParserToken(TSqlTokenType.WhiteSpace, "\r\n"),
 
-                    new TSqlParserToken(TSqlTokenType.Create, "CREATE")
+                    new TSqlParserToken(TSqlTokenType.Alter, "ALTER")
+                };
+        }
+
+        private static TSqlParserToken[] MakeCreateAlterInlineTableValuedFunction(string schemaName, string procedureName, string procedureNameUnquoted)
+        {
+            var objectName = string.IsNullOrEmpty(schemaName)
+                ? procedureName
+                : $"{schemaName}.{procedureName}";
+            var createFunctionDynamicSqlLiteral = $"'CREATE FUNCTION {objectName}() RETURNS TABLE AS RETURN (SELECT 1 FOO)'";
+
+            return new[]
+            {
+                    // IF NOT EXISTS (SELECT 1 FROM sys.objects WITH (nolock) WHERE object_id = OBJECT_ID('MyProc') and type = N'IF')
+                    new TSqlParserToken(TSqlTokenType.If, "IF"),
+                    MakeWhitespace(),
+                    new TSqlParserToken(TSqlTokenType.Not, "NOT"),
+                    MakeWhitespace(),
+                    new TSqlParserToken(TSqlTokenType.Exists, "EXISTS"),
+                    MakeWhitespace(),
+                    new TSqlParserToken(TSqlTokenType.LeftParenthesis, "("),
+                    new TSqlParserToken(TSqlTokenType.Select, "SELECT"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.Integer, "1"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.From, "FROM"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.Identifier, "sys"),
+                        new TSqlParserToken(TSqlTokenType.Dot, "."),
+                        new TSqlParserToken(TSqlTokenType.Identifier, "objects"),
+                    MakeWhitespace(),
+                    new TSqlParserToken(TSqlTokenType.With, "WITH"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.LeftParenthesis, "("),
+                        new TSqlParserToken(TSqlTokenType.Identifier, "nolock"),
+                        new TSqlParserToken(TSqlTokenType.RightParenthesis, ")"),
+                    MakeWhitespace(),
+                    new TSqlParserToken(TSqlTokenType.Where, "WHERE"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.Identifier, "object_id"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.EqualsSign, "="),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.Function, "OBJECT_ID"),
+                            new TSqlParserToken(TSqlTokenType.LeftParenthesis, "("),
+                            new TSqlParserToken(TSqlTokenType.AsciiStringLiteral, $"N'{objectName}'"),
+                            new TSqlParserToken(TSqlTokenType.RightParenthesis, ")"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.And, "AND"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.Identifier, "type"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.EqualsSign, "="),
+                        MakeWhitespace(),
+                            new TSqlParserToken(TSqlTokenType.AsciiStringLiteral, "N'IF'"),
+                    new TSqlParserToken(TSqlTokenType.RightParenthesis, ")"),
+                    new TSqlParserToken(TSqlTokenType.WhiteSpace, "\r\n  "),
+                    //    EXEC('CREATE FUNCTION dbo.MyProc')
+                    new TSqlParserToken(TSqlTokenType.Exec, "EXEC"),
+                    new TSqlParserToken(TSqlTokenType.LeftParenthesis, "("),
+                    new TSqlParserToken(TSqlTokenType.AsciiStringLiteral, createFunctionDynamicSqlLiteral),
+                    new TSqlParserToken(TSqlTokenType.RightParenthesis, ")"),
+                    new TSqlParserToken(TSqlTokenType.WhiteSpace, "\r\n"),
+                    // GO
+                    new TSqlParserToken(TSqlTokenType.End, "GO"),
+                    new TSqlParserToken(TSqlTokenType.WhiteSpace, "\r\n"),
+
+                    new TSqlParserToken(TSqlTokenType.Alter, "ALTER")
+                };
+        }
+
+        private static TSqlParserToken[] MakeCreateAlterTableValuedFunction(string schemaName, string procedureName, string procedureNameUnquoted)
+        {
+            var objectName = string.IsNullOrEmpty(schemaName)
+                ? procedureName
+                : $"{schemaName}.{procedureName}";
+            var createFunctionDynamicSqlLiteral = $"'CREATE FUNCTION {objectName}() RETURNS @ret TABLE (foo INT) AS BEGIN INSERT INTO @ret SELECT 1 FOO RETURN END'";
+
+            return new[]
+            {
+                    // IF NOT EXISTS (SELECT 1 FROM sys.objects WITH (nolock) WHERE object_id = OBJECT_ID('MyProc') and type = N'IF')
+                    new TSqlParserToken(TSqlTokenType.If, "IF"),
+                    MakeWhitespace(),
+                    new TSqlParserToken(TSqlTokenType.Not, "NOT"),
+                    MakeWhitespace(),
+                    new TSqlParserToken(TSqlTokenType.Exists, "EXISTS"),
+                    MakeWhitespace(),
+                    new TSqlParserToken(TSqlTokenType.LeftParenthesis, "("),
+                    new TSqlParserToken(TSqlTokenType.Select, "SELECT"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.Integer, "1"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.From, "FROM"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.Identifier, "sys"),
+                        new TSqlParserToken(TSqlTokenType.Dot, "."),
+                        new TSqlParserToken(TSqlTokenType.Identifier, "objects"),
+                    MakeWhitespace(),
+                    new TSqlParserToken(TSqlTokenType.With, "WITH"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.LeftParenthesis, "("),
+                        new TSqlParserToken(TSqlTokenType.Identifier, "nolock"),
+                        new TSqlParserToken(TSqlTokenType.RightParenthesis, ")"),
+                    MakeWhitespace(),
+                    new TSqlParserToken(TSqlTokenType.Where, "WHERE"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.Identifier, "object_id"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.EqualsSign, "="),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.Function, "OBJECT_ID"),
+                            new TSqlParserToken(TSqlTokenType.LeftParenthesis, "("),
+                            new TSqlParserToken(TSqlTokenType.AsciiStringLiteral, $"N'{objectName}'"),
+                            new TSqlParserToken(TSqlTokenType.RightParenthesis, ")"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.And, "AND"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.Identifier, "type"),
+                        MakeWhitespace(),
+                        new TSqlParserToken(TSqlTokenType.EqualsSign, "="),
+                        MakeWhitespace(),
+                            new TSqlParserToken(TSqlTokenType.AsciiStringLiteral, "N'TF'"),
+                    new TSqlParserToken(TSqlTokenType.RightParenthesis, ")"),
+                    new TSqlParserToken(TSqlTokenType.WhiteSpace, "\r\n  "),
+                    //    EXEC('CREATE FUNCTION dbo.MyProc')
+                    new TSqlParserToken(TSqlTokenType.Exec, "EXEC"),
+                    new TSqlParserToken(TSqlTokenType.LeftParenthesis, "("),
+                    new TSqlParserToken(TSqlTokenType.AsciiStringLiteral, createFunctionDynamicSqlLiteral),
+                    new TSqlParserToken(TSqlTokenType.RightParenthesis, ")"),
+                    new TSqlParserToken(TSqlTokenType.WhiteSpace, "\r\n"),
+                    // GO
+                    new TSqlParserToken(TSqlTokenType.End, "GO"),
+                    new TSqlParserToken(TSqlTokenType.WhiteSpace, "\r\n"),
+
+                    new TSqlParserToken(TSqlTokenType.Alter, "ALTER")
                 };
         }
 

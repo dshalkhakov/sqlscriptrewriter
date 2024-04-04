@@ -1,10 +1,4 @@
 ﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
-using System;
-using System.Collections.Generic;
-using System.Globalization;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace SqlScriptRewriter.Tests
 {
@@ -21,7 +15,7 @@ namespace SqlScriptRewriter.Tests
             {
                 return true;
             }
-            if (string.CompareOrdinal(schema, "test") == 0 && string.IsNullOrEmpty(procedureName))
+            if (string.CompareOrdinal(schema, "evv") == 0 && string.IsNullOrEmpty(procedureName))
             {
                 return true;
             }
@@ -108,8 +102,8 @@ END;";
         #region Schemas
 
         [DataTestMethod]
-        [DataRow("1", "test")]
-        [DataRow("2", "[test]")]
+        [DataRow("1", "evv")]
+        [DataRow("2", "[evv]")]
         public void RewritesCreateSchemaToCreateSchemaIfNotExists(string description, string schemaName)
         {
             // Arrange
@@ -120,8 +114,8 @@ END;";
             var output = _sut.Rewrite(sql, _createToAlterAction, out var errors);
 
             // Assert
-            var outputSqlFormat = @"IF NOT EXISTS (SELECT name FROM sys.schemas WITH (nolock) WHERE name = 'test')
-  EXEC('CREATE SCHEMA [test]');
+            var outputSqlFormat = @"IF NOT EXISTS (SELECT name FROM sys.schemas WITH (nolock) WHERE name = 'evv')
+  EXEC('CREATE SCHEMA [evv]');
 GO";
             var outputSql = string.Format(outputSqlFormat, schemaName);
             AssertExtensions.AreEqualIgnoringSymbols(outputSql, output);
@@ -129,8 +123,8 @@ GO";
         }
 
         [DataTestMethod] // alter schema is left without modification
-        [DataRow("1", "test")]
-        [DataRow("2", "[test]")]
+        [DataRow("1", "evv")]
+        [DataRow("2", "[evv]")]
         public void RewritesAlterSchemaToItself(string description, string schemaName)
         {
             // Arrange
@@ -149,60 +143,167 @@ GO";
 
         #endregion
 
-        #region Functions
+        #region Scalar Functions (FN)
 
         [DataTestMethod]
-        [DataRow("1", "MyFunc")]
-        [DataRow("2", "[MyFunc]")]
-        [DataRow("3", "dbo.MyFunc")]
-        [DataRow("4", "[dbo].MyFunc")]
-        [DataRow("5", "[dbo].[MyFunc]")]
-        public void RewritesCreateFunctionToDropCreate(string description, string functionName)
+        [DataRow("1", "MyScalarFunc")]
+        [DataRow("2", "[MyScalarFunc]")]
+        [DataRow("3", "dbo.MyScalarFunc")]
+        [DataRow("4", "[dbo].MyScalarFunc")]
+        [DataRow("5", "[dbo].[MyScalarFunc]")]
+        public void RewritesCreateScalarFunctionToCreateAlter(string description, string functionName)
         {
             // Arrange
-            var sqlTemplate = @"CREATE FUNCTION {0}() RETURNS INT AS BEGIN RETURN 10 END";
+            var sqlTemplate = @"CREATE FUNCTION {0}() RETURNS INT AS BEGIN RETURN 20 END";
             var sql = string.Format(sqlTemplate, functionName);
 
             // Act
             var output = _sut.Rewrite(sql, _createToAlterAction, out var errors);
 
             // Assert
-            var outputSqlFormat = @"IF EXISTS (SELECT name FROM sys.objects WITH (nolock) WHERE object_id = OBJECT_ID(N'{0}') AND type IN (N'FN',N'TF',N'IF',N'TF'))
-  EXEC('DROP FUNCTION {0}')
+            var outputSqlFormat = @"IF NOT EXISTS (SELECT 1 FROM sys.objects WITH (nolock) WHERE object_id = OBJECT_ID(N'{0}') AND type = N'FN')
+  EXEC('CREATE FUNCTION {0}() RETURNS INT AS BEGIN RETURN 1 END')
 GO
-CREATE FUNCTION {0}() RETURNS INT AS BEGIN RETURN 10 END";
+ALTER FUNCTION {0}() RETURNS INT AS BEGIN RETURN 20 END";
             var outputSql = string.Format(outputSqlFormat, functionName);
             AssertExtensions.AreEqualIgnoringSymbols(outputSql, output);
             Assert.AreEqual(0, errors.Count);
         }
 
         [DataTestMethod]
-        [DataRow("1", "MyFunc")]
-        [DataRow("2", "[MyFunc]")]
-        [DataRow("3", "dbo.MyFunc")]
-        [DataRow("4", "[dbo].MyFunc")]
-        [DataRow("5", "[dbo].[MyFunc]")]
-        public void RewritesAlterFunctionToDropCreate(string description, string functionName)
+        [DataRow("1", "MyScalarFunc")]
+        [DataRow("2", "[MyScalarFunc]")]
+        [DataRow("3", "dbo.MyScalarFunc")]
+        [DataRow("4", "[dbo].MyScalarFunc")]
+        [DataRow("5", "[dbo].[MyScalarFunc]")]
+        public void RewritesAlterScalarFunctionToCreateAlter(string description, string functionName)
         {
             // Arrange
-            var sqlTemplate = @"ALTER FUNCTION {0}() RETURNS INT AS BEGIN RETURN 10 END";
+            var sqlTemplate = @"ALTER FUNCTION {0}() RETURNS INT AS BEGIN RETURN 20 END";
             var sql = string.Format(sqlTemplate, functionName);
 
             // Act
             var output = _sut.Rewrite(sql, _createToAlterAction, out var errors);
 
             // Assert
-            var outputSqlFormat = @"IF EXISTS (SELECT name FROM sys.objects WITH (nolock) WHERE object_id = OBJECT_ID(N'{0}') AND type IN (N'FN',N'TF',N'IF',N'TF'))
-  EXEC('DROP FUNCTION {0}')
+            var outputSqlFormat = @"IF NOT EXISTS (SELECT 1 FROM sys.objects WITH (nolock) WHERE object_id = OBJECT_ID(N'{0}') AND type = N'FN')
+  EXEC('CREATE FUNCTION {0}() RETURNS INT AS BEGIN RETURN 1 END')
 GO
-CREATE FUNCTION {0}() RETURNS INT AS BEGIN RETURN 10 END";
+ALTER FUNCTION {0}() RETURNS INT AS BEGIN RETURN 20 END";
             var outputSql = string.Format(outputSqlFormat, functionName);
-            
             AssertExtensions.AreEqualIgnoringSymbols(outputSql, output);
             Assert.AreEqual(0, errors.Count);
         }
 
-        #endregion
+        #endregion // !Scalar Functions (FN)
+
+        #region Inline Table-Valued Functions (IF)
+
+        [DataTestMethod]
+        [DataRow("1", "MyITVFunc")]
+        [DataRow("2", "[MyITVFunc]")]
+        [DataRow("3", "dbo.MyITVFunc")]
+        [DataRow("4", "[dbo].MyITVFunc")]
+        [DataRow("5", "[dbo].[MyITVFunc]")]
+        public void RewritesCreateInlineTableValuedFunctionToCreateAlter(string description, string functionName)
+        {
+            // Arrange
+            var sqlTemplate = @"CREATE FUNCTION {0}() RETURNS TABLE AS RETURN (SELECT * FROM FOO)";
+            var sql = string.Format(sqlTemplate, functionName);
+
+            // Act
+            var output = _sut.Rewrite(sql, _createToAlterAction, out var errors);
+
+            // Assert
+            var outputSqlFormat = @"IF NOT EXISTS (SELECT 1 FROM sys.objects WITH (nolock) WHERE object_id = OBJECT_ID(N'{0}') AND type = N'IF')
+  EXEC('CREATE FUNCTION {0}() RETURNS TABLE AS RETURN (SELECT 1 FOO)')
+GO
+ALTER FUNCTION {0}() RETURNS TABLE AS RETURN (SELECT * FROM FOO)";
+            var outputSql = string.Format(outputSqlFormat, functionName);
+            AssertExtensions.AreEqualIgnoringSymbols(outputSql, output);
+            Assert.AreEqual(0, errors.Count);
+        }
+
+        [DataTestMethod]
+        [DataRow("1", "MyITVFunc")]
+        [DataRow("2", "[MyITVFunc]")]
+        [DataRow("3", "dbo.MyITVFunc")]
+        [DataRow("4", "[dbo].MyITVFunc")]
+        [DataRow("5", "[dbo].[MyITVFunc]")]
+        public void RewritesAlterInlineTableValuedFunctionToCreateAlter(string description, string functionName)
+        {
+            // Arrange
+            var sqlTemplate = @"ALTER FUNCTION {0}() RETURNS TABLE AS RETURN (SELECT * FROM FOO)";
+            var sql = string.Format(sqlTemplate, functionName);
+
+            // Act
+            var output = _sut.Rewrite(sql, _createToAlterAction, out var errors);
+
+            // Assert
+            var outputSqlFormat = @"IF NOT EXISTS (SELECT 1 FROM sys.objects WITH (nolock) WHERE object_id = OBJECT_ID(N'{0}') AND type = N'IF')
+  EXEC('CREATE FUNCTION {0}() RETURNS TABLE AS RETURN (SELECT 1 FOO)')
+GO
+ALTER FUNCTION {0}() RETURNS TABLE AS RETURN (SELECT * FROM FOO)";
+            var outputSql = string.Format(outputSqlFormat, functionName);
+            AssertExtensions.AreEqualIgnoringSymbols(outputSql, output);
+            Assert.AreEqual(0, errors.Count);
+        }
+
+        #endregion // !Inline Table-Valued Functions (IF)
+
+        #region Table-Valued Functions (TF)
+
+        [DataTestMethod]
+        [DataRow("1", "MyTVFunc")]
+        [DataRow("2", "[MyTVFunc]")]
+        [DataRow("3", "dbo.MyTVFunc")]
+        [DataRow("4", "[dbo].MyTVFunc")]
+        [DataRow("5", "[dbo].[MyTVFunc]")]
+        public void RewritesCreateTableValuedFunctionToCreateAlter(string description, string functionName)
+        {
+            // Arrange
+            var sqlTemplate = @"CREATE FUNCTION {0}() RETURNS @ret TABLE (bar INT) AS BEGIN INSERT INTO @ret SELECT 10 BAR RETURN END";
+            var sql = string.Format(sqlTemplate, functionName);
+
+            // Act
+            var output = _sut.Rewrite(sql, _createToAlterAction, out var errors);
+
+            // Assert
+            var outputSqlFormat = @"IF NOT EXISTS (SELECT 1 FROM sys.objects WITH (nolock) WHERE object_id = OBJECT_ID(N'{0}') AND type = N'TF')
+  EXEC('CREATE FUNCTION {0}() RETURNS @ret TABLE (foo INT) AS BEGIN INSERT INTO @ret SELECT 1 FOO RETURN END')
+GO
+ALTER FUNCTION {0}() RETURNS @ret TABLE (bar INT) AS BEGIN INSERT INTO @ret SELECT 10 BAR RETURN END";
+            var outputSql = string.Format(outputSqlFormat, functionName);
+            AssertExtensions.AreEqualIgnoringSymbols(outputSql, output);
+            Assert.AreEqual(0, errors.Count);
+        }
+
+        [DataTestMethod]
+        [DataRow("1", "MyITVFunc")]
+        [DataRow("2", "[MyITVFunc]")]
+        [DataRow("3", "dbo.MyITVFunc")]
+        [DataRow("4", "[dbo].MyITVFunc")]
+        [DataRow("5", "[dbo].[MyITVFunc]")]
+        public void RewritesAlterTableValuedFunctionToCreateAlter(string description, string functionName)
+        {
+            // Arrange
+            var sqlTemplate = @"ALTER FUNCTION {0}() RETURNS @ret TABLE (bar INT) AS BEGIN INSERT INTO @ret SELECT 10 BAR RETURN END";
+            var sql = string.Format(sqlTemplate, functionName);
+
+            // Act
+            var output = _sut.Rewrite(sql, _createToAlterAction, out var errors);
+
+            // Assert
+            var outputSqlFormat = @"IF NOT EXISTS (SELECT 1 FROM sys.objects WITH (nolock) WHERE object_id = OBJECT_ID(N'{0}') AND type = N'TF')
+  EXEC('CREATE FUNCTION {0}() RETURNS @ret TABLE (foo INT) AS BEGIN INSERT INTO @ret SELECT 1 FOO RETURN END')
+GO
+ALTER FUNCTION {0}() RETURNS @ret TABLE (bar INT) AS BEGIN INSERT INTO @ret SELECT 10 BAR RETURN END";
+            var outputSql = string.Format(outputSqlFormat, functionName);
+            AssertExtensions.AreEqualIgnoringSymbols(outputSql, output);
+            Assert.AreEqual(0, errors.Count);
+        }
+
+        #endregion // !Table-Valued Functions (TF)
 
         #region Views
 
